@@ -13,13 +13,13 @@ class SwiGLU(nn.Module):
         return self.out(F.silu(gate)*value)
 
 class PosEncoder(nn.Module):
-    def __init__(self,embed_dim=1024,max_length=5120):
+    def __init__(self,embed_dim,max_length=5120):
         super().__init__()
 
         pe = torch.zeros(max_length,embed_dim)
         position = torch.arange(0,max_length,dtype=torch.float).unsqueeze(1)
 
-        div = torch.exp(torch.arange(0,max_length,2).float()*(-math.log(10000)/embed_dim))
+        div = torch.exp(torch.arange(0,embed_dim,2).float()*(-math.log(10000)/embed_dim))
 
         pe[:,0::2] = torch.sin(position*div) # Sin for even positions
         pe[:,1::2] = torch.cos(position*div) # Cos for odd positions
