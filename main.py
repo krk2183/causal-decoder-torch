@@ -141,4 +141,4 @@ for epoch in range(EPOCHS):
         torch.save(model.state_dict(),f"model_best.pth")
         print(f'New best model saved with loss {best_loss:.4f}')
     
-    torch.save(model.state_dict(),f'model_fineweb_epoch{epoch+1}.pth')
+    torch.save(model.state_dict(),f'model_checkpoints/model_fineweb_epoch{epoch+1}.pth')
