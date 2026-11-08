@@ -14,6 +14,7 @@ torch.backends.cudnn.benchmark=True
 EPOCHS = 50
 BATCH_SIZE=16
 ACCUMULATION_STEPS=4
+DEBUG=False
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 tokenizer = PreTrainedTokenizerFast.from_pretrained('fineweb_tokenizer',pad_token='<pad>')
@@ -34,9 +35,11 @@ class ItDataset(IterableDataset):
         return self.gen_func(self.dataset)
 SIZE=512 # 75% less VRAM footprint than 1024
 # Stream and tokenize
-def gen_subset(dataset):
+def gen_subset(dataset): # will add batching to ameliorate the CPU bottleneck during cloud training 
     global current_tokens
     buffer = []
+    batch_texts = []
+    batch_size=64
     for sample in dataset:
         tokens = tokenizer(sample['text'],add_special_tokens=True,return_attention_mask=False,max_length=1024)
         num_tokens = len(tokens['input_ids'])
@@ -109,11 +112,12 @@ for epoch in range(EPOCHS):
             loss = criterion(preds.reshape(-1,preds.shape[-1]), decoder_tgt.reshape(-1))
             unscaled_loss = loss.item()
             loss/=ACCUMULATION_STEPS
-            # FOR DEBUGGING ONLY
-            print("Preds shape:", preds.shape)          # Should be [Batch, SeqLen, 49267]
-            print("Target max token ID:", decoder_tgt.max().item()) # Should be < 49267
-            print("Logits min/max:", preds.min().item(), preds.max().item()) # Should not be inf/nan or > 50
-        
+            
+            if DEBUG:
+                print("Preds shape:", preds.shape)          # Should be [batch_size, seq_len, 49267(vocab size)]
+                print("Target max token ID:", decoder_tgt.max().item()) # Should be < 49267
+                print("Logits min/max:", preds.min().item(), preds.max().item()) # sHould not be inf/nan or > 50
+            
         scaler.scale(loss).backward()
 
         # Will only step the optimizer every N mini-batches

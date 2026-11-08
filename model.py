@@ -61,13 +61,47 @@ class Decoder(nn.Module):
                 attn_mask=causal_mask, is_causal=False
             )
         
-        # Now attn_output is guaranteed to be a Tensor
         x = src + self.dropout_attn(attn_output)
         
         norm_ffn = self.norm2(x)
         ffn_out = self.ffn(norm_ffn)
         output = x + self.dropout_ffn(ffn_out)
         return output
+
+class Decoder_SDPA(nn.Module):
+    def __init__(self,d_model=1024,dim_feedforward=None,nheads=16,dropout=0.1):
+        super().__init__()
+        if dim_feedforward is None:
+            dim_feedforward = int(8/3*d_model)
+        self.dim_head = d_model//nheads
+        self.nheads = nheads
+        self.d_model = d_model
+
+        self.norm1,self.norm2 = nn.RMSNorm(d_model), nn.RMSNorm(d_model)
+        self.dropout_attn,self.dropout_ffn = nn.Dropout(dropout), nn.Dropout(dropout)
+
+        self.q_proj = nn.Linear(d_model,d_model,bias=False)
+        self.k_proj = nn.Linear(d_model,d_model,bias=False)
+        self.v_proj = nn.Linear(d_model,d_model,bias=False)
+        self.out_proj = nn.Linear(d_model,d_model,bias=False)
+    
+        self.ffn = SwiGLU(d_model,dim_feedforward)
+
+    def forward(self,src):
+        batch_size,seq_len,_ = src.shape
+        src_norm = self.norm1(src)
+        # Must convert bsz,seq_len,nheads,dim_head into bsz,dim_head,nheads,dim_head
+        q_out = self.q_proj(src_norm).view(batch_size,seq_len,self.nheads,self.dim_head).transpose(1,2)
+        k_out = self.k_proj(src_norm).view(batch_size,seq_len,self.nheads,self.dim_head).transpose(1,2)
+        v_out = self.v_proj(src_norm).view(batch_size,seq_len,self.nheads,self.dim_head).transpose(1,2)
+
+        attn_out = F.scaled_dot_product_attention(query=q_out,key=k_out,value=v_out,attn_mask=None,is_causal=True)
+        attn_out = attn_out.transpose(1,2).reshape(batch_size,seq_len,self.d_model)
+
+        attn_out = src+self.dropout_attn(self.out_proj(attn_out))
+        attn_norm = self.norm2(attn_out)
+        ffn_out = self.ffn(attn_norm)
+        return attn_out+self.dropout_ffn(ffn_out)
 
 class Transformer(nn.Module):
     def __init__(self,d_model=1024,dim_feedforward=4096,nheads=16,n_layers=8,vocab_size=49_267,dropout=0.1):
@@ -76,7 +110,8 @@ class Transformer(nn.Module):
         self.pos_embed = PosEncoder(embed_dim=d_model,max_length=5120)
 
         self.layers = nn.ModuleList([
-            Decoder(d_model,dim_feedforward,nheads,dropout)
+            # Decoder(d_model,dim_feedforward,nheads,dropout)
+            Decoder_SDPA(d_model,dim_feedforward,nheads,dropout)
             for _ in range(n_layers)
         ])
 
@@ -89,7 +124,8 @@ class Transformer(nn.Module):
 
         dec_out = out
         for layer in self.layers:
-            dec_out = layer(dec_out,padding_mask)
+            # dec_out = layer(dec_out,padding_mask) # When using the MHA implementation
+            dec_out = layer(dec_out) # SDPA implementation doesn't take the padding_mask argument
         dec_out = self.final_norm(dec_out)
         logits = self.out(dec_out)
         return logits
