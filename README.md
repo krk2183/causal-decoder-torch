@@ -5,9 +5,9 @@ A custom-built, from-scratch causal language model trained on a 24-billion token
 <br>
 
 ## Architecture Highlights
-* **Parameters:** ~120M/236M (8 layers, $d_{\text{model}}=1024$, 16 attention heads)
+* **Parameters:** ~120M/236M (16 layers, $d_{\text{model}}=768  $, 16 attention heads)
 * **Activations & Norm:** Custom SwiGLU FFN and Pre-LN RMSNorm
-* **Data Pipeline:** On-t# PyTorch 120M/236M Custom Decoder-Only LLM
+* **Data Pipeline:** On-t# PyTorch 189M Custom Decoder-Only LLM
 
 <br>
 
