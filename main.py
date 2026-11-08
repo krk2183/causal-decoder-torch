@@ -7,15 +7,17 @@ from model import Transformer
 from torch.utils.data import DataLoader, IterableDataset
 import bitsandbytes as bnb
 from tqdm import tqdm
-
+import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.benchmark=True
-EPOCHS = 50
-BATCH_SIZE=16
-ACCUMULATION_STEPS=4
+EPOCHS = 5
+BATCH_SIZE=64
+ACCUMULATION_STEPS=8
 DEBUG=False
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+SUPPORTED = (True if torch.cuda.get_device_capability()[0]>=7 else False)
 
 tokenizer = PreTrainedTokenizerFast.from_pretrained('fineweb_tokenizer',pad_token='<pad>')
 tokenizer.padding_side='right'
@@ -24,7 +26,7 @@ tokenizer.pad_token = '<pad>'
 ds = datasets.load_dataset('HuggingFaceFW/fineweb-edu',name='CC-MAIN-2025-26',streaming=True,split='train') # ~152B tokens
 ds = ds.shuffle(buffer_size=100_000)
 
-to_keep = 48_000_000_000 # 48B is needed for a model of size ~240M parameters
+to_keep = 1_750_000_000 # 48B is needed for a model of size ~240M parameters
 current_tokens = 0
 
 class ItDataset(IterableDataset):
@@ -135,9 +137,9 @@ if hasattr(model,'gradient_checkpointing_enable'):
 # Check compute capability to see if torch.compile is supported
 if torch.cuda.get_device_capability()[0]>=7:
     model = torch.compile(model)
-
-scaler = torch.amp.GradScaler('cuda' if torch.cuda.is_available() else 'cpu')
-optimizer = bnb.optim.AdamW8bit(model.parameters(),lr=1e-4,weight_decay=1e-5) # To stay under the VRAM envelope
+if SUPPORTED:
+    scaler = torch.amp.GradScaler('cuda' if torch.cuda.is_available() else 'cpu')
+optimizer = bnb.optim.AdamW8bit(model.parameters(),lr=3e-4,weight_decay=1e-5) # To stay under the VRAM envelope
 criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,T_max=EPOCHS,eta_min=1e-6)
 
@@ -146,6 +148,12 @@ best_loss = float('inf')
 train_loss = 0.0
 train_samples = 0.0
 effective_batch_size = BATCH_SIZE/ACCUMULATION_STEPS
+
+if SUPPORTED: # If volta or newer
+    dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+else:
+    dtype = torch.float32
+
 for epoch in range(EPOCHS):
     model.train()
     epoch_loss=0.0
@@ -159,13 +167,6 @@ for epoch in range(EPOCHS):
         decoder_inp,decoder_tgt = input_ids[:,:-1], input_ids[:,1:]
         decoder_inp,decoder_tgt = decoder_inp.to(device,non_blocking=True), decoder_tgt.to(device,non_blocking=True)
 
-        dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float32
-
-        if torch.cuda.get_device_capability()[0]>=7: # If volta or newer
-            dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-        else:
-            dtype = torch.float32
-
         with torch.amp.autocast(device_type='cuda',dtype=dtype):
             preds = model(decoder_inp)
             loss = criterion(preds.reshape(-1,preds.shape[-1]), decoder_tgt.reshape(-1))
@@ -177,16 +178,23 @@ for epoch in range(EPOCHS):
                 print("Target max token ID:", decoder_tgt.max().item()) # Should be < 49267
                 print("Logits min/max:", preds.min().item(), preds.max().item()) # sHould not be inf/nan or > 50
             
-        scaler.scale(loss).backward()
-
+        if SUPPORTED:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
         # Will only step the optimizer every N mini-batches
         if (step+1)%ACCUMULATION_STEPS==0:
             # Gradient clipping to prevent exploding gradients
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(),max_norm=1.0)
+            if SUPPORTED:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(),max_norm=1.0)
 
-            scaler.step(optimizer)
-            scaler.update()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                torch.nn.utils.clip_grad_norm_(model.parameters(),max_norm=1.0)
+                optimizer.step()
+
             optimizer.zero_grad(set_to_none=True)
 
         epoch_loss+=unscaled_loss
@@ -195,10 +203,17 @@ for epoch in range(EPOCHS):
 
     # Handle any leftover gradients in case total batches aren't divisible by ACCUMULATION_STEPS
     if num_batches%ACCUMULATION_STEPS!=0:
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(),max_norm=1.0)
-        scaler.step(optimizer)
-        scaler.update()
+        if SUPPORTED:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(),max_norm=1.0)
+            scaler.step(optimizer)
+            scaler.update()
+ 
+        else:
+            torch.nn.utils.clip_grad_norm_(model.parameters(),max_norm=1.0)
+            optimizer.step(
+                
+            )
         optimizer.zero_grad(set_to_none=True)
 
     if (epoch+1)%5==0:

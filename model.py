@@ -104,7 +104,7 @@ class Decoder_SDPA(nn.Module):
         return attn_out+self.dropout_ffn(ffn_out)
 
 class Transformer(nn.Module):
-    def __init__(self,d_model=1024,dim_feedforward=4096,nheads=16,n_layers=8,vocab_size=49_267,dropout=0.1):
+    def __init__(self,d_model=768,dim_feedforward=2048,nheads=16,n_layers=16,vocab_size=49_267,dropout=0.1):
         super().__init__()
         self.embed = nn.Embedding(vocab_size,d_model)
         self.pos_embed = PosEncoder(embed_dim=d_model,max_length=5120)
