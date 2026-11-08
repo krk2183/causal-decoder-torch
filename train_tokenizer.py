@@ -25,8 +25,16 @@ def iterator(dataset,batch_size=1000):
         yield batch
 
 custom_iterator = iterator(ds,batch_size=1000)
-trainer = trainers.BpeTrainer(vocab_size=49_267,special_tokens=['<unk>','<eos>','<bos>','<pad>'])
+trainer = trainers.BpeTrainer(vocab_size=49_267,
+    special_tokens=['<unk>','<eos>','<bos>','<pad>'])
+    
 tokenizer.train_from_iterator(custom_iterator,trainer=trainer)
-func_tokenizer = PreTrainedTokenizerFast(tokenizer,unk_token='<unk>',eos_token='<eos>',pad_token='<pad>',bos_token='<bos>')
+func_tokenizer = PreTrainedTokenizerFast(
+    tokenizer_object=tokenizer,
+    unk_token='<unk>',
+    bos_token='<bos>',
+    eos_token='<eos>',
+    pad_token='<pad>'
+)
 
 func_tokenizer.save_pretrained('fineweb_tokenizer')

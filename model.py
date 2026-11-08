@@ -44,7 +44,7 @@ class Decoder(nn.Module):
     def forward(self, src, padding_mask=None):
         seq_len = src.size(1)
         causal_mask = torch.triu(torch.ones(seq_len, seq_len, device=src.device) == 0, diagonal=1).bool()
-        norm_src = self.norm1(src) # Or use src depending on your pre-norm/post-norm preference
+        norm_src = self.norm1(src) 
         
         if padding_mask is not None:
             padding_mask = padding_mask.bool()
@@ -52,12 +52,12 @@ class Decoder(nn.Module):
                 padding_mask = padding_mask[:, :src.size(1)]
 
             attn_output, _ = self.causalm_attn(
-                query=src, key=src, value=src, 
+                query=norm_src, key=norm_src, value=norm_src, 
                 key_padding_mask=padding_mask, attn_mask=causal_mask, is_causal=False
             )
         else:
             attn_output, _ = self.causalm_attn(
-                query=src, key=src, value=src, 
+                query=norm_src, key=norm_src, value=norm_src, 
                 attn_mask=causal_mask, is_causal=False
             )
         
@@ -82,6 +82,7 @@ class Transformer(nn.Module):
 
         self.out = nn.Linear(d_model,vocab_size)
         self.d_model = d_model
+        self.final_norm = nn.RMSNorm(d_model)
 
     def forward(self,src,padding_mask=None):
         out = self.pos_embed(self.embed(src)*math.sqrt(self.d_model))
@@ -89,6 +90,6 @@ class Transformer(nn.Module):
         dec_out = out
         for layer in self.layers:
             dec_out = layer(dec_out,padding_mask)
-        
+        dec_out = self.final_norm(dec_out)
         logits = self.out(dec_out)
         return logits

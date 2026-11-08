@@ -18,7 +18,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 tokenizer = PreTrainedTokenizerFast.from_pretrained('fineweb_tokenizer',pad_token='<pad>')
 tokenizer.padding_side='right'
-tokenizer.pad_token = '<eos>'
+tokenizer.pad_token = '<pad>'
 
 ds = datasets.load_dataset('HuggingFaceFW/fineweb-edu',name='CC-MAIN-2025-26',streaming=True,split='train') # ~152B tokens
 ds = ds.shuffle(buffer_size=100_000)
@@ -76,7 +76,7 @@ if torch.cuda.get_device_capability()[0]>=7:
 
 scaler = torch.amp.GradScaler('cuda' if torch.cuda.is_available() else 'cpu')
 optimizer = bnb.optim.AdamW8bit(model.parameters(),lr=1e-4,weight_decay=1e-5) # To stay under the VRAM envelope
-criterion = nn.CrossEntropyLoss()
+criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,T_max=EPOCHS,eta_min=1e-6)
 
 # Gradient accumulation to allow for larger effective batch sizes
@@ -98,11 +98,21 @@ for epoch in range(EPOCHS):
         decoder_inp,decoder_tgt = decoder_inp.to(device,non_blocking=True), decoder_tgt.to(device,non_blocking=True)
 
         dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float32
+
+        if torch.cuda.get_device_capability()[0]>=7: # If volta or newer
+            dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        else:
+            dtype = torch.float32
+
         with torch.amp.autocast(device_type='cuda',dtype=dtype):
             preds = model(decoder_inp)
             loss = criterion(preds.reshape(-1,preds.shape[-1]), decoder_tgt.reshape(-1))
             unscaled_loss = loss.item()
             loss/=ACCUMULATION_STEPS
+            # FOR DEBUGGING ONLY
+            print("Preds shape:", preds.shape)          # Should be [Batch, SeqLen, 49267]
+            print("Target max token ID:", decoder_tgt.max().item()) # Should be < 49267
+            print("Logits min/max:", preds.min().item(), preds.max().item()) # Should not be inf/nan or > 50
         
         scaler.scale(loss).backward()
 
@@ -116,9 +126,7 @@ for epoch in range(EPOCHS):
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
 
-        batch_size = input_ids.size(0)
-        epoch_loss+=loss.item()
-        train_samples+=batch_size
+        epoch_loss+=unscaled_loss
         num_batches+=1
         loop.set_postfix(loss=f'{unscaled_loss:.4f}')
 
@@ -130,8 +138,10 @@ for epoch in range(EPOCHS):
         scaler.update()
         optimizer.zero_grad(set_to_none=True)
 
-    torch.cuda.empty_cache()
-    gc.collect()
+    if (epoch+1)%5==0:
+        torch.cuda.empty_cache()
+        gc.collect()
+
     scheduler.step()
     avg_epoch_loss = epoch_loss/num_batches
     #print(f"Epoch {epoch+1}/{EPOCHS} - Loss: {avg_epoch_loss:.4f}")
