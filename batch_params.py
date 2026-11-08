@@ -38,7 +38,7 @@ def get_batch_settings():
 
     return batch_size, accumulation_steps
 
-BATCH_SIZE, ACCUMULATION_STEPS = auto_detect_batch_settings()
+BATCH_SIZE, ACCUMULATION_STEPS = get_batch_settings()
 
 print(f"   • Total Effective Batch Size : {BATCH_SIZE}")
 print(f"   • Accumulation Steps         : {ACCUMULATION_STEPS}")
