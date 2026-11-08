@@ -2,12 +2,16 @@
 
 A custom-built, from-scratch causal language model trained on a 24-billion token pipeline using PyTorch, with a custom tokenizer trained on a sample from the fineweb-edu dataset's CC-MAIN-2025-26 subset.
 
+<br>
+
 ## Architecture Highlights
 * **Parameters:** ~120M/236M (8 layers, $d_{\text{model}}=1024$, 16 attention heads)
 * **Activations & Norm:** Custom SwiGLU FFN and Pre-LN RMSNorm
 * **Data Pipeline:** On-t# PyTorch 120M/236M Custom Decoder-Only LLM
 
-## ⚙️ Hardware Requirements
+<br>
+
+## Hardware Requirements
 
 This training script is optimized for memory efficiency using **8-bit AdamW (`bitsandbytes`)**, **bfloat16 mixed-precision**, **gradient checkpointing**, and a sequence length of **512**.
 
@@ -19,6 +23,8 @@ This training script is optimized for memory efficiency using **8-bit AdamW (`bi
 | **Storage** | **20 GB+ Free Space** | **50 GB+ NVMe SSD** *(Hugging Face caching)* |
 
 > ℹ️ **Note:** An **NVIDIA CUDA-enabled GPU** is recommended to enable the `bitsandbytes` 8-bit optimizer for memory efficiency. 
+
+<br>
 
 ## Quickstart
 ### Initial setup
@@ -35,11 +41,3 @@ python train_tokenizer.py
 ```bash
 python main.py
 ```
-he-fly streaming via Hugging Face (`fineweb-edu`) with custom token-counting guards and rolling token-packing.
-
-## Quickstart
-```bash
-git clone [https://github.com/krk2183/decoder-lm-120m-236m](https://github.com/krk2183/decoder-lm-120m-236m)
-cd pytorch-llm-scratch
-pip install -r requirements.txt
-python main.py
