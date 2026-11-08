@@ -4,6 +4,7 @@ import numpy as np
 from itertools import chain
 from transformers import PreTrainedTokenizerFast
 from model import Transformer
+from batch_params import get_batch_settings
 from torch.utils.data import DataLoader, IterableDataset
 import bitsandbytes as bnb
 from tqdm import tqdm
@@ -13,11 +14,11 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.benchmark=True
 EPOCHS = 5
-BATCH_SIZE=64
-ACCUMULATION_STEPS=8
+BATCH_SIZE,ACCUMULATION_STEPS=get_batch_settings()
+EFFECTIVE_BATCH_SIZE = BATCH_SIZE/ACCUMULATION_STEPS
 DEBUG=False
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-SUPPORTED = (True if torch.cuda.get_device_capability()[0]>=7 else False)
+SUPPORTED = True if (torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 7) else False
 
 tokenizer = PreTrainedTokenizerFast.from_pretrained('fineweb_tokenizer',pad_token='<pad>')
 tokenizer.padding_side='right'
@@ -127,7 +128,7 @@ def custom_collate(batch): # for grouping
     labels = torch.tensor([item['labels'] for item in batch],dtype=torch.long)
     return {'input_ids':input_ids,'labels':labels}
 
-train_loader = DataLoader(train_dataset,batch_size=int(BATCH_SIZE/ACCUMULATION_STEPS),shuffle=False,num_workers=0,collate_fn=custom_collate,pin_memory=True)
+train_loader = DataLoader(train_dataset,batch_size=int(EFFECTIVE_BATCH_SIZE),shuffle=False,num_workers=0,collate_fn=custom_collate,pin_memory=True)
 
 model = Transformer()
 model= model.to(device,non_blocking=True)
@@ -135,14 +136,15 @@ if hasattr(model,'gradient_checkpointing_enable'):
     model.gradient_checkpointing_enable()
     
 # Check compute capability to see if torch.compile is supported
-if torch.cuda.get_device_capability()[0]>=7:
-    model = torch.compile(model)
 if SUPPORTED:
+    model = torch.compile(model)
     scaler = torch.amp.GradScaler('cuda' if torch.cuda.is_available() else 'cpu')
+    
 if torch.cuda.is_available():
     optimizer = bnb.optim.AdamW8bit(model.parameters(),lr=3e-4,weight_decay=1e-5) # To stay under the VRAM envelope
 else:
     optimizer = torch.optim.AdamW(model.parameters(),lr=3e-4,weight_decay=1e-5,fused=True) # For compatibility with devices other than CUDA enabled hardware
+
 criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,T_max=EPOCHS,eta_min=1e-6)
 
@@ -150,7 +152,6 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,T_max=EPOCHS,et
 best_loss = float('inf')
 train_loss = 0.0
 train_samples = 0.0
-effective_batch_size = BATCH_SIZE/ACCUMULATION_STEPS
 
 if SUPPORTED: # If volta or newer
     dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
