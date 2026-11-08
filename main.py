@@ -59,48 +59,65 @@ SIZE=512 # 75% less VRAM footprint than 1024
 #         if current_tokens>=to_keep:
 #             break
 
-def gen_subset(dataset): # Batching should reduce CPU bottlenecking
+SIZE = 512 
+
+def gen_subset(dataset):
     global current_tokens
-    buffer, batch_texts = [],[]
-    batch_size=64
-
+    buffer = []
+    batch_texts = []
+    batch_size = 64  # Group texts together for fast batch tokenization
+    
     for sample in dataset:
-        if len(batch_texts)==batch_size:
-            tokens = tokenizer(sample['text'],add_special_tokens=True,return_attention_mask=False,truncation=True,max_length=1024)
-
-            for input_ids in tokens['input_ids']:
+        batch_texts.append(sample['text'])
+        
+        if len(batch_texts) == batch_size:
+            # Tokenize the whole batch in one fast Rust call
+            batch_outputs = tokenizer(
+                batch_texts, 
+                add_special_tokens=True, 
+                return_attention_mask=False, 
+                truncation=True, 
+                max_length=1024
+            )
+            
+            for input_ids in batch_outputs['input_ids']:
                 num_tokens = len(input_ids)
-                current_tokens+=num_tokens
+                current_tokens += num_tokens
                 buffer.extend(input_ids)
-
-                while len(buffer)>=SIZE:
+                
+                while len(buffer) >= SIZE:
                     chunk = buffer[:SIZE]
                     buffer = buffer[SIZE:]
                     yield {
-                        'input_ids':chunk,
-                        'labels':chunk.copy()
+                        'input_ids': chunk,
+                        'labels': chunk.copy()
                     }
-        batch_texts = []
-    if current_tokens>= to_keep:
-        break 
-    
-    # Handling leftover articles stored in batch_texts
-    if batch_texts > 0 and current_tokens<to_keep:
-        tokens = tokenizer(batch_texts,add_special_tokens=True,return_attention_mask=False,truncation=True,max_length=1024)
+            
+            batch_texts = [] # Reset batch buffer
 
-        for input_ids in tokens['input_ids']:
-            num_tokens=len(input_ids)
-            current_tokens+=num_tokens
+            if current_tokens >= to_keep:
+                break
+            
+    # Process any leftover texts in the final partial batch
+    if batch_texts and current_tokens < to_keep:
+        batch_outputs = tokenizer(
+            batch_texts, 
+            add_special_tokens=True, 
+            return_attention_mask=False, 
+            truncation=True, 
+            max_length=1024
+        )
+        for input_ids in batch_outputs['input_ids']:
+            num_tokens = len(input_ids)
+            current_tokens += num_tokens
             buffer.extend(input_ids)
-
-            if len(buffer)>=SIZE:
+            while len(buffer) >= SIZE:
                 chunk = buffer[:SIZE]
                 buffer = buffer[SIZE:]
                 yield {
                     'input_ids': chunk,
-                    'labels': buffer
+                    'labels': chunk.copy()
                 }
-
 train_dataset = ItDataset(gen_subset,ds)
 
 def custom_collate(batch): # for grouping
