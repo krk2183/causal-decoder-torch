@@ -139,7 +139,10 @@ if torch.cuda.get_device_capability()[0]>=7:
     model = torch.compile(model)
 if SUPPORTED:
     scaler = torch.amp.GradScaler('cuda' if torch.cuda.is_available() else 'cpu')
-optimizer = bnb.optim.AdamW8bit(model.parameters(),lr=3e-4,weight_decay=1e-5) # To stay under the VRAM envelope
+if torch.cuda.is_available():
+    optimizer = bnb.optim.AdamW8bit(model.parameters(),lr=3e-4,weight_decay=1e-5) # To stay under the VRAM envelope
+else:
+    optimizer = torch.optim.AdamW(model.parameters(),lr=3e-4,weight_decay=1e-5,fused=True) # For compatibility with devices other than CUDA enabled hardware
 criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,T_max=EPOCHS,eta_min=1e-6)
 
