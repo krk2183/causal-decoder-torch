@@ -35,29 +35,71 @@ class ItDataset(IterableDataset):
         return self.gen_func(self.dataset)
 SIZE=512 # 75% less VRAM footprint than 1024
 # Stream and tokenize
-def gen_subset(dataset): # will add batching to ameliorate the CPU bottleneck during cloud training 
+# def gen_subset(dataset): # will add batching to ameliorate the CPU bottleneck during cloud training 
+#     global current_tokens
+#     buffer = []
+#     batch_texts = []
+#     batch_size=64
+#     for sample in dataset:
+#         tokens = tokenizer(sample['text'],add_special_tokens=True,return_attention_mask=False,max_length=1024)
+#         num_tokens = len(tokens['input_ids'])
+        
+#         current_tokens+=num_tokens
+#         buffer.extend(tokens['input_ids'])
+        
+#         while len(buffer)>=SIZE:
+#             chunk = buffer[:SIZE]
+#             buffer = buffer[SIZE:]
+
+#             yield {
+#                 'input_ids':chunk,
+#                 'labels':chunk.copy()
+#             }
+
+#         if current_tokens>=to_keep:
+#             break
+
+def gen_subset(dataset): # Batching should reduce CPU bottlenecking
     global current_tokens
-    buffer = []
-    batch_texts = []
+    buffer, batch_texts = [],[]
     batch_size=64
+
     for sample in dataset:
-        tokens = tokenizer(sample['text'],add_special_tokens=True,return_attention_mask=False,max_length=1024)
-        num_tokens = len(tokens['input_ids'])
-        
-        current_tokens+=num_tokens
-        buffer.extend(tokens['input_ids'])
-        
-        while len(buffer)>=SIZE:
-            chunk = buffer[:SIZE]
-            buffer = buffer[SIZE:]
+        if len(batch_texts)==batch_size:
+            tokens = tokenizer(sample['text'],add_special_tokens=True,return_attention_mask=False,truncation=True,max_length=1024)
 
-            yield {
-                'input_ids':chunk,
-                'labels':chunk.copy()
-            }
+            for input_ids in tokens['input_ids']:
+                num_tokens = len(input_ids)
+                current_tokens+=num_tokens
+                buffer.extend(input_ids)
 
-        if current_tokens>=to_keep:
-            break
+                while len(buffer)>=SIZE:
+                    chunk = buffer[:SIZE]
+                    buffer = buffer[SIZE:]
+                    yield {
+                        'input_ids':chunk,
+                        'labels':chunk.copy()
+                    }
+        batch_texts = []
+    if current_tokens>= to_keep:
+        break 
+    
+    # Handling leftover articles stored in batch_texts
+    if batch_texts > 0 and current_tokens<to_keep:
+        tokens = tokenizer(batch_texts,add_special_tokens=True,return_attention_mask=False,truncation=True,max_length=1024)
+
+        for input_ids in tokens['input_ids']:
+            num_tokens=len(input_ids)
+            current_tokens+=num_tokens
+            buffer.extend(input_ids)
+
+            if len(buffer)>=SIZE:
+                chunk = buffer[:SIZE]
+                buffer = buffer[SIZE:]
+                yield {
+                    'input_ids': chunk,
+                    'labels': buffer
+                }
 
 train_dataset = ItDataset(gen_subset,ds)
 
